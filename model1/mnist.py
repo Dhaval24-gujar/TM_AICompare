@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from codecarbon import track_emissions
+
 POLY_DEGREE = 4
 W_target = torch.randn(POLY_DEGREE, 1) * 5
 b_target = torch.randn(1) * 5
@@ -14,7 +15,7 @@ b_target = torch.randn(1) * 5
 def make_features(x):
     """Builds features i.e. a matrix with columns [x, x^2, x^3, x^4]."""
     x = x.unsqueeze(1)
-    return torch.cat([x ** i for i in range(1, POLY_DEGREE+1)], 1)
+    return torch.cat([x ** i for i in range(1, POLY_DEGREE + 1)], 1)
 
 
 def f(x):
@@ -38,9 +39,11 @@ def get_batch(batch_size=32):
     y = f(x)
     return x, y
 
-@track_emissions(project_name="Regression")
+
+@track_emissions(project_name="Regression", output_dir="/app/emissions_logs",
+                 save_to_file=True,output_file="model1_emissions.csv")
 def regression():
-# Define model
+    # Define model
     fc = torch.nn.Linear(W_target.size(0), 1)
 
     for batch_idx in count(1):
@@ -68,3 +71,6 @@ def regression():
     print('Loss: {:.6f} after {} batches'.format(loss, batch_idx))
     print('==> Learned function:\t' + poly_desc(fc.weight.view(-1), fc.bias))
     print('==> Actual function:\t' + poly_desc(W_target.view(-1), b_target))
+
+if(__name__ == '__main__'):
+    regression()

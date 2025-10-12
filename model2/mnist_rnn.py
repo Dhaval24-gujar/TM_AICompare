@@ -75,7 +75,9 @@ def test(args, model, device, test_loader):
         test_loss, correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
 
-@track_emissions(project_name="MNIST_RNN")
+@track_emissions(project_name="MNIST_RNN",output_dir="/app/emissions_logs",
+    save_to_file=True,
+    output_file="model2_emissions.csv")
 def rnn():
 
     # Training settings
@@ -137,5 +139,5 @@ def rnn():
         torch.save(model.state_dict(), "mnist_rnn.pt")
 
 
-# if __name__ == '__main__':
-#     rnn()
+if __name__ == '__main__':
+    rnn()
