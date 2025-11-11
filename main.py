@@ -88,20 +88,14 @@ After you have gathered this data, provide a summary of your findings. Conclude 
 
     final_response = result.get("structured_response")
 
-    print("response:", final_response)
+    print(f"""
+    Tool Calls: {final_response.tool_calls}
+    Analysis: {final_response.Analysis}
+    Suggestions: {final_response.Suggestions}
+    """)
     return final_response
-
-
 
 
 
 if __name__ == "__main__":
     response = generate_report()
-    print(f"""
-    tool_calls: {response.tool_calls}
-    
-    Analysis: {response.Analysis}
-
-    Suggestions: {response.Suggestions}
-
-    """)
