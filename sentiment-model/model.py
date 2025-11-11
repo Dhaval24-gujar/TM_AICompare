@@ -1,45 +1,83 @@
-from transformers import pipeline
-from codecarbon import EmissionsTracker
+import os
 import time
 import random
-import os
+import threading
+import boto3
+from transformers import pipeline
+from codecarbon import EmissionsTracker
 
-# Ensure log directory exists
-os.makedirs("/app/emissions_logs", exist_ok=True)
-
-# Initialize model and emissions tracker
-sentiment_pipe = pipeline(
-    "sentiment-analysis",
-    model="distilbert-base-uncased-finetuned-sst-2-english"
+# --- AWS S3 Setup ---
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("AWS_DEFAULT_REGION")
 )
 
-tracker = EmissionsTracker(
-    project_name="SentimentModel",
-    output_dir="/app/emissions_logs",
-    save_to_file=True,
-    output_file="sentiment_model_emissions.csv"
-)
+BUCKET_NAME = "carbon-logs-dev"
+FOLDER_NAME = "emissions"
+FILE_NAME = "sentiment_analysis_model_emissions.csv"
+EMISSIONS_FILE = f"/app/emissions_logs/{FILE_NAME}"
 
-texts = [
-    "Tech Mahindra is doing great work in AI sustainability!",
-    "The product performance is disappointing and inefficient.",
-    "I'm impressed with the new update and its improvements.",
-    "Energy consumption of this system is too high.",
-    "Our AI infrastructure is becoming more efficient."
-]
 
-print("🚀 Sentiment model started. Tracking emissions continuously...\n")
-tracker.start()
+def upload_to_s3():
+    """Wait for CodeCarbon log file to appear, then upload immediately and every 5 min."""
+    print("🕒 Waiting for emissions file to appear...")
+    while not os.path.exists(EMISSIONS_FILE):
+        time.sleep(2)
+        print("📂 File detected! Uploading initial version to S3...")
+        try:
+            s3.upload_file(EMISSIONS_FILE, BUCKET_NAME, f"{FOLDER_NAME}/{FILE_NAME}")
+            print("✅ Initial upload successful.")
+        except Exception as e:
+            print("⚠️ Initial upload failed:", e)
 
-try:
+    # Continue periodic uploads
     while True:
-        text = random.choice(texts)
-        result = sentiment_pipe(text)[0]
-        print(f"🧩 Input: {text}")
-        print(f"➡️ Sentiment: {result['label']} (score: {result['score']:.3f})\n")
-        time.sleep(5)
-        tracker.flush()  # force CodeCarbon to write interim results
+        time.sleep(30)
+        try:
+            s3.upload_file(EMISSIONS_FILE, BUCKET_NAME, f"{FOLDER_NAME}/{FILE_NAME}")
+            print("✅ Uploaded emissions log to S3 (periodic)")
+        except Exception as e:
+            print("⚠️ Upload failed:", e)
 
-except KeyboardInterrupt:
-    print("\n🛑 Stopping sentiment model...")
-    tracker.stop()
+
+
+
+def run_sentiment_model():
+    """Run sentiment model continuously and track emissions."""
+    os.makedirs("/app/emissions_logs", exist_ok=True)
+    tracker = EmissionsTracker(
+        project_name="SentimentModel",
+        output_dir="/app/emissions_logs",
+        output_file=f"{FILE_NAME}",
+        save_to_file=True,
+        measure_power_secs=5, # more frequent logging
+        save_to_prometheus=True,
+        prometheus_url="http://host.docker.internal:9091",
+    )
+
+
+    tracker.start()
+
+    sentiment = pipeline("sentiment-analysis")
+    try:
+        while True:
+            result = sentiment("I love building AI agents!")
+            print(result)
+            time.sleep(random.randint(2, 5))
+    except KeyboardInterrupt:
+        print("\n🛑 Stopping Sentiment analysis model...")
+        tracker.stop()
+    finally:
+        tracker.stop()
+        print("🧾 Emissions tracking stopped.")
+
+
+if __name__ == "__main__":
+    t1 = threading.Thread(target=run_sentiment_model)
+    t2 = threading.Thread(target=upload_to_s3)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()

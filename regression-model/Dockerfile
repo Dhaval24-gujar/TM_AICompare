@@ -7,7 +7,7 @@ WORKDIR /app
 # Copy code
 COPY . /app
 
-RUN pip --no-cache-dir install scikit-learn numpy codecarbon
+RUN pip --no-cache-dir install scikit-learn numpy codecarbon boto3 dotenv
 
 # Run your model
 CMD ["python", "model.py"]
