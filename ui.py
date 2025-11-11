@@ -1,495 +1,521 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import os
-import seaborn as sns
-from ai import generate_chat_response
+from datetime import datetime
+from tools import athena_query
+from main import generate_report
 
+# Page configuration
 st.set_page_config(
-    page_title="AI Carbon Monitor Dashboard",
-    page_icon="🌱",
+    page_title="Carbon Emissions Dashboard",
+    page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # Custom CSS for better styling
 st.markdown("""
-<style>
-.metric-card {
-    background-color: #f0f2f6;
-    padding: 1rem;
-    border-radius: 0.5rem;
-    border-left: 4px solid #1f77b4;
-}
-.help-text {
-    color: #666;
-    font-size: 0.9em;
-    font-style: italic;
-}
-</style>
+    <style>
+    .main-header {
+        font-size: 3rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .recommendation-box {
+        background-color: #e8f4f8;
+        padding: 1rem;
+        border-left: 4px solid #1f77b4;
+        border-radius: 5px;
+        margin: 0.5rem 0;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        padding: 1rem;
+        border-left: 4px solid #ffc107;
+        border-radius: 5px;
+        margin: 0.5rem 0;
+    }
+    .success-box {
+        background-color: #d4edda;
+        padding: 1rem;
+        border-left: 4px solid #28a745;
+        border-radius: 5px;
+        margin: 0.5rem 0;
+    }
+    </style>
 """, unsafe_allow_html=True)
 
-# Header with explanation
-st.title("🌱 AI Carbon Monitor Dashboard")
-st.markdown("""
-**Track and compare the environmental impact of your AI models**
+# Helper functions
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def fetch_emissions_data():
+    """Fetch emissions data from Athena database"""
+    try:
+        query = """
+        SELECT
+            project_name,
+            CAST(emissions AS DOUBLE) as emissions_kg,
+            CAST(energy_consumed AS DOUBLE) as energy_kwh,
+            duration,
+            gpu_model,
+            cpu_model,
+            cloud_region,
+            timestamp
+        FROM emissions
+        WHERE emissions IS NOT NULL
+        ORDER BY timestamp DESC
+        """
+        results = athena_query(query)
 
-This dashboard analyzes carbon emissions data from your AI models stored in the `emissions_logs/` directory.
-""")
+        if results:
+            df = pd.DataFrame(results, columns=[
+                'project_name', 'emissions_kg', 'energy_kwh', 'duration',
+                'gpu_model', 'cpu_model', 'cloud_region', 'timestamp'
+            ])
+            return df
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error fetching data: {str(e)}")
+        return pd.DataFrame()
 
-# Create main tabs
-main_tab1, main_tab2 = st.tabs(["Dashboard", "AI Assistant"])
+@st.cache_data(ttl=300)
+def fetch_model_summary():
+    """Fetch aggregated emissions summary per model"""
+    try:
+        query = """
+        SELECT
+            project_name,
+            COUNT(*) as run_count,
+            SUM(CAST(emissions AS DOUBLE)) as total_emissions_kg,
+            AVG(CAST(emissions AS DOUBLE)) as avg_emissions_kg,
+            SUM(CAST(energy_consumed AS DOUBLE)) as total_energy_kwh,
+            AVG(CAST(energy_consumed AS DOUBLE)) as avg_energy_kwh,
+            AVG(duration) as avg_duration_sec
+        FROM emissions
+        WHERE emissions IS NOT NULL
+        GROUP BY project_name
+        ORDER BY total_emissions_kg DESC
+        """
+        results = athena_query(query)
 
-with main_tab2:
-    # Initialize chat history
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {"role": "assistant", "content": "Hello! I'm your AI Carbon Assistant. I can help you analyze and understand your models' environmental impact. What would you like to know?"}
-        ]
-    
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-    
-    # Chat input
-    if prompt := st.chat_input("Ask about your carbon emissions data..."):
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        
-        # Display user message
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        
-        # Generate assistant response
-        with st.chat_message("assistant"):
-            # Load data for analysis if available
-            try:
-                LOG_DIR = "emissions_logs"
-                if os.path.exists(LOG_DIR):
-                    csv_files = [f for f in os.listdir(LOG_DIR) if f.endswith(".csv")]
-                    if csv_files:
-                        dataframes = []
-                        for file in csv_files:
-                            try:
-                                path = os.path.join(LOG_DIR, file)
-                                df = pd.read_csv(path)
-                                df["model"] = (
-                                    os.path.splitext(file)[0]
-                                    .replace("_emissions", "")
-                                    .replace("_", " ")
-                                    .title()
-                                )
-                                dataframes.append(df)
-                            except Exception:
-                                continue
-                        
-                        if dataframes:
-                            chat_data = pd.concat(dataframes, ignore_index=True)
-                            response = generate_chat_response(prompt, chat_data)
-                        else:
-                            response = "I don't have access to any valid emissions data to analyze. Please ensure your CSV files are properly formatted in the emissions_logs/ directory."
-                    else:
-                        response = "I don't see any CSV files in the emissions_logs/ directory. Please add your emissions data files there so I can help you analyze them."
-                else:
-                    response = "The emissions_logs/ directory doesn't exist. Please create it and add your emissions CSV files so I can help you analyze your data."
-            except Exception as e:
-                response = f"I encountered an error while trying to access your data: {str(e)}"
-            
-            st.markdown(response)
-        
-        # Add assistant response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        if results:
+            df = pd.DataFrame(results, columns=[
+                'project_name', 'run_count', 'total_emissions_kg', 'avg_emissions_kg',
+                'total_energy_kwh', 'avg_energy_kwh', 'avg_duration_sec'
+            ])
+            return df
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error fetching summary: {str(e)}")
+        return pd.DataFrame()
 
-with main_tab1:
-    # Dashboard content starts here
-    st.header("📊 Data Analysis")
-    with st.expander("ℹ️ How to use this dashboard", expanded=False):
-        st.markdown("""
-        **Getting Started:**
-        1. **Place Data**: Add your emission CSV files to the `emissions_logs/` folder
-        2. **Select Models**: Use the sidebar to filter which models to compare
-        3. **Choose Metrics**: Pick the environmental metric you want to analyze
-        4. **Ask Questions**: Use the AI Assistant tab to get insights about your data
-        
-        **File Format**: Your CSV files should contain columns like `emissions`, `energy_consumed`, `duration`, etc.
-        """)
-    
-    LOG_DIR = "emissions_logs"
+@st.cache_data(ttl=300)
+def fetch_hardware_efficiency():
+    """Fetch hardware efficiency metrics"""
+    try:
+        query = """
+        SELECT
+            gpu_model,
+            COUNT(*) as usage_count,
+            AVG(CAST(emissions AS DOUBLE)) as avg_emissions_kg,
+            AVG(CAST(energy_consumed AS DOUBLE)) as avg_energy_kwh
+        FROM emissions
+        WHERE gpu_model IS NOT NULL AND emissions IS NOT NULL
+        GROUP BY gpu_model
+        ORDER BY avg_emissions_kg DESC
+        """
+        results = athena_query(query)
 
-    dataframes = []
-    
-    # Progress indicator
-    data_loading_status = st.empty()
-    
-    # Load data from emissions_logs directory only
-    if os.path.exists(LOG_DIR):
-        csv_files = [f for f in os.listdir(LOG_DIR) if f.endswith(".csv")]
-        if not csv_files:
-            st.warning("📂 No CSV files found in emissions_logs/ directory.")
-            st.info("💡 **Tip**: Place your emission CSV files in the `emissions_logs/` directory to get started.")
-        else:
-            data_loading_status.info(f"📁 Loading {len(csv_files)} file(s) from emissions_logs/...")
-            for file in csv_files:
-                try:
-                    path = os.path.join(LOG_DIR, file)
-                    df = pd.read_csv(path)
-                    df["model"] = (
-                        os.path.splitext(file)[0]
-                        .replace("_emissions", "")
-                        .replace("_", " ")
-                        .title()
-                    )
-                    dataframes.append(df)
-                except Exception as e:
-                    st.error(f"❌ Error loading {file}: {str(e)}")
-            
-            if dataframes:
-                data_loading_status.success(f"✅ Successfully loaded {len(dataframes)} file(s) from local directory")
-    else:
-        st.warning("📂 emissions_logs/ folder not found.")
-        st.info("💡 **Tip**: Create an `emissions_logs/` directory and place your CSV files there to get started.")
+        if results:
+            df = pd.DataFrame(results, columns=[
+                'gpu_model', 'usage_count', 'avg_emissions_kg', 'avg_energy_kwh'
+            ])
+            return df
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error fetching hardware data: {str(e)}")
+        return pd.DataFrame()
 
-    if not dataframes:
-        st.warning("⚠️ No data loaded yet.")
-        st.markdown("""
-        **To get started:**
-        - Place CSV files in the `emissions_logs/` directory
-        - Use the AI Assistant tab to ask questions about your data
-        """)
-        st.stop()
-    
-    # Combine all data
-    data = pd.concat(dataframes, ignore_index=True)
-    data_loading_status.empty()  # Clear the loading status
+def display_emissions_overview(df_summary):
+    """Display emissions overview with key metrics"""
+    st.markdown("## 📊 Emissions Overview")
 
-    # --- Sidebar Filters ---
-    st.sidebar.header("🎛️ Analysis Controls")
+    if df_summary.empty:
+        st.warning("No emissions data available")
+        return
 
-    # Metric definitions for better UX
-    metric_info = {
-        "emissions": "🌱 Carbon Emissions (kg CO2eq)",
-        "energy_consumed": "⚡ Total Energy Consumed (kWh)", 
-        "duration": "⏱️ Runtime Duration (seconds)",
-        "cpu_energy": "🖥️ CPU Energy Usage (kWh)",
-        "gpu_energy": "🎮 GPU Energy Usage (kWh)", 
-        "ram_energy": "💾 RAM Energy Usage (kWh)"
-    }
-    
-    # Available metrics (only show those present in data)
-    available_metrics = [col for col in metric_info.keys() if col in data.columns]
-    
-    if not available_metrics:
-        st.sidebar.error("❌ No recognized metrics found in the data")
-        st.stop()
-    
-    st.sidebar.subheader("📊 Select Metric")
-    metric_labels = [metric_info[m] for m in available_metrics]
-    selected_metric_label = st.sidebar.selectbox(
-        "Choose what to analyze:", 
-        metric_labels,
-        help="Select the environmental metric you want to compare across models"
-    )
-    metric = available_metrics[metric_labels.index(selected_metric_label)]
-    
-    st.sidebar.subheader("🤖 Select Models")
-    models = sorted(data["model"].unique())
-    st.sidebar.write(f"**Available models:** {len(models)}")
-    selected_models = st.sidebar.multiselect(
-        "Choose models to compare:", 
-        models, 
-        default=models,
-        help="Select one or more models to include in the analysis"
-    )
-    
-    if not selected_models:
-        st.sidebar.warning("⚠️ Please select at least one model")
-        st.stop()
-    
-    data = data[data["model"].isin(selected_models)]
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
 
-    # --- Main Dashboard ---
-    if not data.empty:
-        st.header("📈 Analysis Results")
-        
-        # Data overview
-        col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        total_emissions = df_summary['total_emissions_kg'].sum()
+        st.metric(
+            label="Total Emissions",
+            value=f"{total_emissions:.2f} kg CO₂",
+            delta=None
+        )
+
+    with col2:
+        total_energy = df_summary['total_energy_kwh'].sum()
+        st.metric(
+            label="Total Energy Consumed",
+            value=f"{total_energy:.2f} kWh",
+            delta=None
+        )
+
+    with col3:
+        total_runs = df_summary['run_count'].sum()
+        st.metric(
+            label="Total Model Runs",
+            value=f"{int(total_runs)}",
+            delta=None
+        )
+
+    with col4:
+        avg_emissions = df_summary['avg_emissions_kg'].mean()
+        st.metric(
+            label="Avg Emissions per Run",
+            value=f"{avg_emissions:.4f} kg CO₂",
+            delta=None
+        )
+
+def display_model_comparison(df_summary):
+    """Display model-by-model comparison"""
+    st.markdown("## 🤖 Model Comparison")
+
+    if df_summary.empty:
+        st.warning("No model data available")
+        return
+
+    # Create tabs for different views
+    tab1, tab2, tab3 = st.tabs(["📈 Charts", "📋 Table", "🔍 Details"])
+
+    with tab1:
+        col1, col2 = st.columns(2)
+
         with col1:
-            st.metric("📊 Total Records", len(data))
+            # Bar chart for total emissions
+            fig_emissions = px.bar(
+                df_summary,
+                x='project_name',
+                y='total_emissions_kg',
+                title='Total Emissions by Model',
+                labels={'total_emissions_kg': 'Total Emissions (kg CO₂)', 'project_name': 'Model'},
+                color='total_emissions_kg',
+                color_continuous_scale='Reds'
+            )
+            fig_emissions.update_layout(showlegend=False)
+            st.plotly_chart(fig_emissions, use_container_width=True)
+
         with col2:
-            st.metric("🤖 Models Analyzed", len(selected_models))
-        with col3:
-            st.metric("🧮 Unique Models", f"{len(data['model'].unique())} models")
-        with col4:
-            if 'timestamp' in data.columns:
-                date_range = pd.to_datetime(data['timestamp'], errors='coerce')
-                if not date_range.isna().all():
-                    days = (date_range.max() - date_range.min()).days + 1
-                    st.metric("📅 Days Span", f"{days} days")
-                else:
-                    st.metric("📅 Time Data", "Not available")
-        
-        st.subheader("📊 Model Performance Summary")
-        
-        # Calculate summary with available metrics only
-        available_summary_metrics = [m for m in available_metrics if m in data.columns]
-        summary = data.groupby("model")[available_summary_metrics].sum()
-        
-        # Format numbers for better readability
-        def format_number(val):
-            if abs(val) >= 1e6:
-                return f"{val/1e6:.2f}M"
-            elif abs(val) >= 1e3:
-                return f"{val/1e3:.2f}K"
-            elif abs(val) >= 1:
-                return f"{val:.3f}"
-            else:
-                return f"{val:.6f}"
-        
-        # Create a formatted version for display
-        display_summary = summary.copy()
-        for col in display_summary.columns:
-            display_summary[col] = display_summary[col].apply(format_number)
-        
+            # Bar chart for energy consumption
+            fig_energy = px.bar(
+                df_summary,
+                x='project_name',
+                y='total_energy_kwh',
+                title='Total Energy Consumption by Model',
+                labels={'total_energy_kwh': 'Energy (kWh)', 'project_name': 'Model'},
+                color='total_energy_kwh',
+                color_continuous_scale='Blues'
+            )
+            fig_energy.update_layout(showlegend=False)
+            st.plotly_chart(fig_energy, use_container_width=True)
+
+        # Pie chart for emissions distribution
+        fig_pie = px.pie(
+            df_summary,
+            values='total_emissions_kg',
+            names='project_name',
+            title='Emissions Distribution Across Models',
+            hole=0.4
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with tab2:
+        # Display detailed table
+        display_df = df_summary.copy()
+        display_df['total_emissions_kg'] = display_df['total_emissions_kg'].round(4)
+        display_df['avg_emissions_kg'] = display_df['avg_emissions_kg'].round(6)
+        display_df['total_energy_kwh'] = display_df['total_energy_kwh'].round(4)
+        display_df['avg_energy_kwh'] = display_df['avg_energy_kwh'].round(6)
+        display_df['avg_duration_sec'] = display_df['avg_duration_sec'].round(2)
+
         st.dataframe(
-            display_summary,
+            display_df,
             use_container_width=True,
             column_config={
-                col: st.column_config.TextColumn(
-                    metric_info.get(col, col.replace('_', ' ').title()),
-                    help=f"Total {col.replace('_', ' ')} across all runs"
-                ) for col in display_summary.columns
+                "project_name": "Model Name",
+                "run_count": "Total Runs",
+                "total_emissions_kg": "Total Emissions (kg CO₂)",
+                "avg_emissions_kg": "Avg Emissions (kg CO₂)",
+                "total_energy_kwh": "Total Energy (kWh)",
+                "avg_energy_kwh": "Avg Energy (kWh)",
+                "avg_duration_sec": "Avg Duration (sec)"
             }
         )
 
-        # --- Key Metrics Overview ---
-        st.subheader(f"🎯 Focus: {metric_info[metric]}")
-        
-        # Display key metrics in a more user-friendly way
-        metric_cols = st.columns(min(4, len(available_summary_metrics)))
-        
-        for i, met in enumerate(available_summary_metrics[:4]):
-            with metric_cols[i]:
-                total_val = summary[met].sum()
-                
-                # Format value based on magnitude
-                if met == 'duration':
-                    # Convert seconds to more readable format
-                    if total_val >= 3600:
-                        display_val = f"{total_val/3600:.1f} hrs"
-                    elif total_val >= 60:
-                        display_val = f"{total_val/60:.1f} min"
-                    else:
-                        display_val = f"{total_val:.1f} sec"
-                elif 'energy' in met or met == 'emissions':
-                    # Use scientific notation for very small values
-                    if abs(total_val) < 0.001:
-                        display_val = f"{total_val:.2e}"
-                    else:
-                        display_val = f"{total_val:.4f}"
-                else:
-                    display_val = format_number(total_val)
-                
-                # Get units based on metric type
-                units = ""
-                if met == 'emissions':
-                    units = "kg CO₂eq"
-                elif 'energy' in met:
-                    units = "kWh"
-                elif met == 'duration':
-                    units = "" if total_val >= 60 else "sec"
-                
-                st.metric(
-                    metric_info.get(met, met.replace('_', ' ').title()),
-                    f"{display_val} {units}".strip(),
-                    help=f"Total {met.replace('_', ' ')} across all selected models"
-                )
+    with tab3:
+        # Detailed view for each model
+        selected_model = st.selectbox("Select a model to view details:", df_summary['project_name'].tolist())
 
-        # --- Enhanced Comparison Visualizations ---
-        st.subheader(f"📊 {metric_info[metric]} - Model Comparison")
-        
-        # Create tabs for different chart types
-        chart_tab1, chart_tab2, chart_tab3 = st.tabs(["📊 Bar Chart", "🥧 Pie Chart", "📈 Detailed View"])
-        
-        with chart_tab1:
-            # Interactive bar chart with Plotly
-            fig_bar = px.bar(
-                x=summary.index, 
-                y=summary[metric],
-                title=f"{metric_info[metric]} by Model",
-                labels={"x": "Model", "y": metric_info[metric]},
-                color=summary[metric],
-                color_continuous_scale="Viridis"
-            )
-            fig_bar.update_layout(
-                showlegend=False,
-                height=400,
-                xaxis_tickangle=-45
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
-            
-            # Show best and worst performers
-            if len(summary) > 1:
-                best_model = summary[metric].idxmin() if metric in ['emissions', 'energy_consumed', 'duration'] else summary[metric].idxmax()
-                worst_model = summary[metric].idxmax() if metric in ['emissions', 'energy_consumed', 'duration'] else summary[metric].idxmin()
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.success(f"🏆 **Best Performer**: {best_model}\n{format_number(summary.loc[best_model, metric])}")
-                with col2:
-                    st.error(f"⚠️ **Needs Improvement**: {worst_model}\n{format_number(summary.loc[worst_model, metric])}")
-        
-        with chart_tab2:
-            # Pie chart for proportion comparison
-            fig_pie = px.pie(
-                values=summary[metric], 
-                names=summary.index,
-                title=f"Proportion of {metric_info[metric]} by Model"
-            )
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
-        
-        with chart_tab3:
-            # Detailed comparison table
-            comparison_df = summary[[metric]].reset_index()
-            comparison_df['Percentage'] = (comparison_df[metric] / comparison_df[metric].sum() * 100).round(2)
-            comparison_df['Rank'] = comparison_df[metric].rank(method='min', ascending=True if metric in ['emissions', 'energy_consumed', 'duration'] else False).astype(int)
-            
-            st.dataframe(
-                comparison_df.sort_values('Rank'),
-                use_container_width=True,
-                column_config={
-                    "model": "Model Name",
-                    metric: st.column_config.NumberColumn(
-                        metric_info[metric],
-                        format="%.6f"
-                    ),
-                    "Percentage": st.column_config.NumberColumn(
-                        "% of Total",
-                        format="%.1f%%"
-                    ),
-                    "Rank": "Performance Rank"
-                }
-            )
+        if selected_model:
+            model_data = df_summary[df_summary['project_name'] == selected_model].iloc[0]
 
-        # --- Time Series Analysis ---
-        time_cols = [col for col in ["timestamp", "time", "date"] if col in data.columns]
-        if time_cols:
-            st.subheader(f"📈 {metric_info[metric]} Trends Over Time")
-            
-            tcol = time_cols[0]
-            data[tcol] = pd.to_datetime(data[tcol], errors="coerce")
-            
-            # Filter out invalid dates
-            valid_time_data = data.dropna(subset=[tcol])
-            
-            if not valid_time_data.empty:
-                # Interactive time series with Plotly
-                fig_time = go.Figure()
-                
-                colors = px.colors.qualitative.Set1
-                for i, model in enumerate(selected_models):
-                    subset = valid_time_data[valid_time_data["model"] == model]
-                    if not subset.empty:
-                        fig_time.add_trace(go.Scatter(
-                            x=subset[tcol],
-                            y=subset[metric],
-                            mode='lines+markers',
-                            name=model,
-                            line=dict(color=colors[i % len(colors)]),
-                            hovertemplate=f'<b>{model}</b><br>' +
-                                        f'Time: %{{x}}<br>' +
-                                        f'{metric_info[metric]}: %{{y:.6f}}<br>' +
-                                        '<extra></extra>'
-                        ))
-                
-                fig_time.update_layout(
-                    title=f"{metric_info[metric]} Evolution",
-                    xaxis_title="Time",
-                    yaxis_title=metric_info[metric],
-                    hovermode='x unified',
-                    height=500
-                )
-                
-                st.plotly_chart(fig_time, use_container_width=True)
-                
-                # Time range info
-                time_range = valid_time_data[tcol].max() - valid_time_data[tcol].min()
-                st.info(f"📅 **Data spans**: {time_range.days} days from {valid_time_data[tcol].min().strftime('%Y-%m-%d')} to {valid_time_data[tcol].max().strftime('%Y-%m-%d')}")
-            else:
-                st.warning("⚠️ No valid timestamp data found for trend analysis.")
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.markdown("### Emissions Metrics")
+                st.write(f"**Total Emissions:** {model_data['total_emissions_kg']:.4f} kg CO₂")
+                st.write(f"**Average per Run:** {model_data['avg_emissions_kg']:.6f} kg CO₂")
+                st.write(f"**Total Runs:** {int(model_data['run_count'])}")
+
+            with col2:
+                st.markdown("### Energy Metrics")
+                st.write(f"**Total Energy:** {model_data['total_energy_kwh']:.4f} kWh")
+                st.write(f"**Average per Run:** {model_data['avg_energy_kwh']:.6f} kWh")
+
+            with col3:
+                st.markdown("### Performance")
+                st.write(f"**Avg Duration:** {model_data['avg_duration_sec']:.2f} seconds")
+                efficiency = model_data['avg_emissions_kg'] / model_data['avg_duration_sec'] if model_data['avg_duration_sec'] > 0 else 0
+                st.write(f"**Efficiency:** {efficiency:.8f} kg CO₂/sec")
+
+def display_hardware_analysis(df_hardware):
+    """Display hardware efficiency analysis"""
+    st.markdown("## 🖥️ Hardware Efficiency Analysis")
+
+    if df_hardware.empty:
+        st.warning("No hardware data available")
+        return
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Hardware emissions comparison
+        fig_hw = px.bar(
+            df_hardware,
+            x='gpu_model',
+            y='avg_emissions_kg',
+            title='Average Emissions by GPU Model',
+            labels={'avg_emissions_kg': 'Avg Emissions (kg CO₂)', 'gpu_model': 'GPU Model'},
+            color='avg_emissions_kg',
+            color_continuous_scale='Oranges'
+        )
+        st.plotly_chart(fig_hw, use_container_width=True)
+
+    with col2:
+        # Usage distribution
+        fig_usage = px.pie(
+            df_hardware,
+            values='usage_count',
+            names='gpu_model',
+            title='GPU Usage Distribution',
+            hole=0.3
+        )
+        st.plotly_chart(fig_usage, use_container_width=True)
+
+    # Hardware table
+    st.markdown("### Hardware Performance Table")
+    st.dataframe(
+        df_hardware,
+        use_container_width=True,
+        column_config={
+            "gpu_model": "GPU Model",
+            "usage_count": "Usage Count",
+            "avg_emissions_kg": "Avg Emissions (kg CO₂)",
+            "avg_energy_kwh": "Avg Energy (kWh)"
+        }
+    )
+
+def display_smart_recommendations(df_summary, df_hardware):
+    """Display intelligent recommendations for reducing emissions"""
+    st.markdown("## 💡 Smart Recommendations")
+
+    recommendations = []
+
+    if not df_summary.empty:
+        # Identify high-emission models
+        high_emission_models = df_summary.nlargest(3, 'total_emissions_kg')
+
+        for idx, model in high_emission_models.iterrows():
+            recommendations.append({
+                'type': 'warning',
+                'title': f'High Emissions: {model["project_name"]}',
+                'description': f'This model has generated {model["total_emissions_kg"]:.4f} kg CO₂ across {int(model["run_count"])} runs. Consider optimizing or reducing usage frequency.'
+            })
+
+        # Identify inefficient models (high emissions per run)
+        if len(df_summary) > 1:
+            median_emissions = df_summary['avg_emissions_kg'].median()
+            inefficient_models = df_summary[df_summary['avg_emissions_kg'] > median_emissions * 1.5]
+
+            for idx, model in inefficient_models.iterrows():
+                recommendations.append({
+                    'type': 'recommendation',
+                    'title': f'Optimize {model["project_name"]}',
+                    'description': f'Average emissions per run ({model["avg_emissions_kg"]:.6f} kg CO₂) is above median. Consider code optimization, batch processing, or model compression.'
+                })
+
+    if not df_hardware.empty:
+        # Hardware recommendations
+        if len(df_hardware) > 1:
+            most_efficient_gpu = df_hardware.nsmallest(1, 'avg_emissions_kg').iloc[0]
+            least_efficient_gpu = df_hardware.nlargest(1, 'avg_emissions_kg').iloc[0]
+
+            if most_efficient_gpu['gpu_model'] != least_efficient_gpu['gpu_model']:
+                recommendations.append({
+                    'type': 'success',
+                    'title': 'Hardware Upgrade Opportunity',
+                    'description': f'Consider migrating workloads from {least_efficient_gpu["gpu_model"]} (avg: {least_efficient_gpu["avg_emissions_kg"]:.6f} kg CO₂) to {most_efficient_gpu["gpu_model"]} (avg: {most_efficient_gpu["avg_emissions_kg"]:.6f} kg CO₂) for better efficiency.'
+                })
+
+    # General recommendations
+    recommendations.extend([
+        {
+            'type': 'recommendation',
+            'title': 'Schedule Jobs During Off-Peak Hours',
+            'description': 'Run batch processing and training jobs during off-peak hours (10 PM - 6 AM) when renewable energy availability is typically higher on the grid.'
+        },
+        {
+            'type': 'recommendation',
+            'title': 'Implement Model Caching',
+            'description': 'Cache model predictions and intermediate results to avoid redundant computations and reduce overall energy consumption.'
+        },
+        {
+            'type': 'recommendation',
+            'title': 'Use Model Quantization',
+            'description': 'Apply quantization techniques to reduce model size and computational requirements, leading to lower energy consumption and emissions.'
+        },
+        {
+            'type': 'success',
+            'title': 'Consider Carbon-Aware Computing',
+            'description': 'Use carbon-aware scheduling tools to automatically shift workloads to regions and times with lower carbon intensity.'
+        }
+    ])
+
+    # Display recommendations
+    for rec in recommendations:
+        if rec['type'] == 'warning':
+            st.markdown(f"""
+                <div class="warning-box">
+                    <strong>⚠️ {rec['title']}</strong><br>
+                    {rec['description']}
+                </div>
+            """, unsafe_allow_html=True)
+        elif rec['type'] == 'success':
+            st.markdown(f"""
+                <div class="success-box">
+                    <strong>✅ {rec['title']}</strong><br>
+                    {rec['description']}
+                </div>
+            """, unsafe_allow_html=True)
         else:
-            st.info("ℹ️ **Time Analysis Unavailable**: No timestamp column found in your data. Add a 'timestamp', 'time', or 'date' column to enable trend analysis.")
+            st.markdown(f"""
+                <div class="recommendation-box">
+                    <strong>💡 {rec['title']}</strong><br>
+                    {rec['description']}
+                </div>
+            """, unsafe_allow_html=True)
 
-        # --- Detailed Data Explorer ---
-        st.header("🔍 Detailed Data Explorer")
-        
-        # Data insights
-        insights_col1, insights_col2 = st.columns(2)
-        with insights_col1:
-            st.info(f"**Dataset Info**\n- Records: {len(data):,}\n- Models: {len(data['model'].unique())}\n- Metrics: {len([col for col in data.columns if col in metric_info])}")
-        
-        with insights_col2:
-            if metric in data.columns:
-                metric_stats = data[metric].describe()
-                st.info(f"**{metric_info[metric]} Statistics**\n- Mean: {format_number(metric_stats['mean'])}\n- Min: {format_number(metric_stats['min'])}\n- Max: {format_number(metric_stats['max'])}")
-        
-        # Data exploration options
-        data_tab1, data_tab2, data_tab3 = st.tabs(["📋 Formatted View", "🔢 Raw Data", "📊 Statistics"])
-        
-        with data_tab1:
-            # Formatted data view
-            display_data = data.copy()
-            
-            # Format numeric columns for better readability
-            for col in display_data.columns:
-                if col in metric_info and pd.api.types.is_numeric_dtype(display_data[col]):
-                    display_data[col] = display_data[col].apply(lambda x: format_number(x) if pd.notna(x) else "N/A")
-            
-            st.dataframe(
-                display_data,
-                use_container_width=True,
-                column_config={
-                    col: st.column_config.TextColumn(
-                        metric_info.get(col, col.replace('_', ' ').title()),
-                        help=f"Formatted values for {col}"
-                    ) for col in display_data.columns if col in metric_info
-                }
-            )
-        
-        with data_tab2:
-            # Raw data with full precision
-            st.dataframe(data, use_container_width=True)
-            
-            # Download option
-            csv_data = data.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Filtered Data as CSV",
-                data=csv_data,
-                file_name=f"filtered_emissions_data_{metric}.csv",
-                mime="text/csv"
-            )
-        
-        with data_tab3:
-            # Statistical summary
-            numeric_cols = data.select_dtypes(include=["number"]).columns
-            if len(numeric_cols) > 0:
-                stats_summary = data[numeric_cols].describe()
-                st.dataframe(stats_summary, use_container_width=True)
-            else:
-                st.info("No numeric columns found for statistical analysis.")
+def display_ai_report():
+    """Generate and display AI-powered analysis report"""
+    st.markdown("## 🤖 AI-Powered Analysis Report")
 
-    else:
-        st.warning("⚠️ No data matches your current filter selections.")
-        st.markdown("""
-        **Suggestions:**
-        - Try selecting different models from the sidebar
-        - Check if your CSV files contain the expected data format
-        - Verify that your CSV files have the required columns
+    st.info("Click the button below to generate a comprehensive AI-powered analysis of your emissions data with personalized recommendations.")
+
+    if st.button("🔄 Generate AI Report", type="primary"):
+        with st.spinner("Analyzing emissions data and generating recommendations..."):
+            try:
+                report = generate_report()
+
+                if report:
+                    # Display tool calls
+                    st.markdown("### 🔍 Data Analysis Queries")
+                    with st.expander("View executed queries", expanded=False):
+                        for i, tool_call in enumerate(report.tool_calls, 1):
+                            st.markdown(f"**Query {i}: {tool_call.name}**")
+                            st.code(tool_call.input, language="sql")
+                            st.markdown("**Results:**")
+                            st.text(tool_call.output[:500] + "..." if len(tool_call.output) > 500 else tool_call.output)
+                            st.divider()
+
+
+                    # Display analysis
+                    st.markdown("### 📊 Analysis")
+                    st.markdown(report.Analysis)
+
+                    # Display suggestions
+                    st.markdown("### 💡 AI-Generated Suggestions")
+                    st.markdown(report.Suggestions)
+
+                    st.success("✅ Report generated successfully!")
+                else:
+                    st.error("Failed to generate report. Please try again.")
+            except Exception as e:
+                st.error(f"Error generating report: {str(e)}")
+
+# Main dashboard
+def main():
+    # Header
+    st.markdown('<h1 class="main-header">🌍 Carbon Emissions Dashboard</h1>', unsafe_allow_html=True)
+    st.markdown("### Monitor and optimize your AI models' environmental impact")
+
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## ⚙️ Dashboard Controls")
+
+        if st.button("🔄 Refresh Data"):
+            st.cache_data.clear()
+            st.rerun()
+
+        st.markdown("---")
+        st.markdown("### 📖 About")
+        st.info("""
+        This dashboard helps you track and reduce the carbon footprint of your AI models by:
+        - Visualizing emissions data
+        - Comparing model efficiency
+        - Providing actionable recommendations
+        - Generating AI-powered insights
         """)
-        
-        if 'data' in locals() and not data.empty:
-            st.info(f"💡 Available models in your data: {', '.join(sorted(data['model'].unique()))}")
+
+        st.markdown("---")
+        st.markdown("### 📊 Data Source")
+        st.write("AWS Athena Database")
+        st.write(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Fetch data
+    with st.spinner("Loading emissions data..."):
+        df_summary = fetch_model_summary()
+        df_hardware = fetch_hardware_efficiency()
+
+    # Display sections
+    if not df_summary.empty:
+        display_emissions_overview(df_summary)
+        st.divider()
+
+        display_model_comparison(df_summary)
+        st.divider()
+
+        display_hardware_analysis(df_hardware)
+        st.divider()
+
+        display_smart_recommendations(df_summary, df_hardware)
+        st.divider()
+
+        display_ai_report()
+    else:
+        st.warning("⚠️ No emissions data available. Please ensure your models are running and logging emissions data.")
+        st.info("💡 Tip: Check that your models are configured with CodeCarbon and uploading data to the S3 bucket.")
+
+if __name__ == "__main__":
+    main()
+

@@ -53,8 +53,6 @@ def run_sentiment_model():
         output_file=f"{FILE_NAME}",
         save_to_file=True,
         measure_power_secs=5, # more frequent logging
-        save_to_prometheus=True,
-        prometheus_url="http://host.docker.internal:9091",
     )
 
 

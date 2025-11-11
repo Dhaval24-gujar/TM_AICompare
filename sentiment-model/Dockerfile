@@ -7,7 +7,7 @@ WORKDIR /app
 # Copy code
 COPY . /app
 
-RUN pip --no-cache-dir install transformers torch codecarbon
+RUN pip --no-cache-dir install transformers torch codecarbon boto3 dotenv
 
 # Run your model
 CMD ["python", "model.py"]

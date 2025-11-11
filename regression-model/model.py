@@ -62,9 +62,7 @@ def run_linear_regression_model():
         output_dir="/app/emissions_logs",
         save_to_file=True,
         output_file=f"{FILE_NAME}",
-        measure_power_secs=5,  # more frequent logging
-        save_to_prometheus=True,
-        prometheus_url="http://host.docker.internal:9091",
+        measure_power_secs=5, # more frequent logging
     )
 
     print("🚀 Linear Regression model started. Tracking emissions continuously...\n")
