@@ -3,8 +3,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-from tools import athena_query
+from pyathena import connect
 from main import generate_report
+import os
 
 # Page configuration
 st.set_page_config(
@@ -55,6 +56,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Helper functions
+def run_athena_query(query: str):
+    """Execute a query against AWS Athena database"""
+    try:
+        cursor = connect(
+            s3_staging_dir="s3://carbon-logs-dev/athena-results/",
+            schema_name="carbon_emissions_db"
+        ).cursor()
+        cursor.execute(query)
+        return cursor.fetchall()
+    except Exception as e:
+        raise Exception(f"Athena query failed: {str(e)}")
+
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def fetch_emissions_data():
     """Fetch emissions data from Athena database"""
@@ -73,7 +86,7 @@ def fetch_emissions_data():
         WHERE emissions IS NOT NULL
         ORDER BY timestamp DESC
         """
-        results = athena_query(query)
+        results = run_athena_query(query)
 
         if results:
             df = pd.DataFrame(results, columns=[
@@ -104,7 +117,7 @@ def fetch_model_summary():
         GROUP BY project_name
         ORDER BY total_emissions_kg DESC
         """
-        results = athena_query(query)
+        results = run_athena_query(query)
 
         if results:
             df = pd.DataFrame(results, columns=[
