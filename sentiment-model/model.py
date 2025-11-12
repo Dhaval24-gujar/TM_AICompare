@@ -5,7 +5,9 @@ import threading
 import boto3
 from transformers import pipeline
 from codecarbon import EmissionsTracker
+from dotenv import load_dotenv
 
+load_dotenv()
 # --- AWS S3 Setup ---
 s3 = boto3.client(
     "s3",
@@ -26,15 +28,15 @@ def upload_to_s3():
     while not os.path.exists(EMISSIONS_FILE):
         time.sleep(2)
         print("📂 File detected! Uploading initial version to S3...")
-        try:
-            s3.upload_file(EMISSIONS_FILE, BUCKET_NAME, f"{FOLDER_NAME}/{FILE_NAME}")
-            print("✅ Initial upload successful.")
-        except Exception as e:
-            print("⚠️ Initial upload failed:", e)
+    try:
+        s3.upload_file(EMISSIONS_FILE, BUCKET_NAME, f"{FOLDER_NAME}/{FILE_NAME}")
+        print("✅ Initial upload successful.")
+    except Exception as e:
+        print("⚠️ Initial upload failed:", e)
 
     # Continue periodic uploads
     while True:
-        time.sleep(30)
+        time.sleep(40)
         try:
             s3.upload_file(EMISSIONS_FILE, BUCKET_NAME, f"{FOLDER_NAME}/{FILE_NAME}")
             print("✅ Uploaded emissions log to S3 (periodic)")
@@ -59,17 +61,11 @@ def run_sentiment_model():
     tracker.start()
 
     sentiment = pipeline("sentiment-analysis")
-    try:
-        while True:
-            result = sentiment("I love building AI agents!")
-            print(result)
-            time.sleep(random.randint(2, 5))
-    except KeyboardInterrupt:
-        print("\n🛑 Stopping Sentiment analysis model...")
-        tracker.stop()
-    finally:
-        tracker.stop()
-        print("🧾 Emissions tracking stopped.")
+    while True:
+        result = sentiment("I love building AI agents!")
+        print(result)
+        time.sleep(10)
+        tracker.flush()  # write partial usage to log
 
 
 if __name__ == "__main__":
