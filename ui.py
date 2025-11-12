@@ -1,12 +1,11 @@
-import streamlit as st
+from datetime import datetime
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
+import streamlit as st
 from pyathena import connect
 from main import generate_report
-import os
-
+from dotenv import load_dotenv
+load_dotenv()
 # Page configuration
 st.set_page_config(
     page_title="Carbon Emissions Dashboard",
@@ -145,7 +144,7 @@ def fetch_hardware_efficiency():
         GROUP BY gpu_model
         ORDER BY avg_emissions_kg DESC
         """
-        results = athena_query(query)
+        results = run_athena_query(query)
 
         if results:
             df = pd.DataFrame(results, columns=[
